@@ -5,8 +5,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from flask import Flask, send_from_directory
 from flask_cors import CORS
-from src.models.user import db
-from src.routes.user import user_bp
 from src.routes.proofreading import proofreading_bp
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
@@ -15,15 +13,13 @@ app.config['SECRET_KEY'] = 'asdf#FGSgvasgf$5$WGT'
 # 启用CORS支持
 CORS(app)
 
-app.register_blueprint(user_bp, url_prefix='/api')
+# 注册审校路由
 app.register_blueprint(proofreading_bp, url_prefix='/api')
 
-# uncomment if you need to use database
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
-with app.app_context():
-    db.create_all()
+# 简单的健康检查路由
+@app.route('/api/health')
+def health_check():
+    return {'status': 'healthy', 'message': 'Intelligent Proofreader API is running'}
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -43,7 +39,7 @@ def serve(path):
 
 
 if __name__ == '__main__':
-    # 获取端口号，支持Railway等平台的动态端口
+    # 获取端口号，支持Render等平台的动态端口
     port = int(os.environ.get('PORT', 5000))
     # 生产环境关闭debug模式
     debug_mode = os.environ.get('FLASK_ENV') == 'development'
