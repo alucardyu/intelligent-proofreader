@@ -9,13 +9,13 @@ class PunctuationChecker:
     def __init__(self):
         # 中文标点符号
         self.chinese_punctuation = '，。！？；：""''（）【】《》'
-        # 英文标点符号 - 修复转义字符
-        self.english_punctuation = r',.!?;:"\'\(\)\[\]<>'
+        # 英文标点符号
+        self.english_punctuation = ',.!?;:"\\'()[]<>'
         
-        # 标点符号配对
+        # 标点符号配对 - 修复语法错误
         self.paired_punctuation = {
             '"': '"',
-            ''': ''',
+            "'": "'",
             '（': '）',
             '【': '】',
             '《': '》'
