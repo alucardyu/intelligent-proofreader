@@ -1,50 +1,59 @@
 """
 错别字检查服务
-使用 pycorrector 库进行错别字检测和纠正
+使用 pycorrector 库进行错别字检测和纠正，如果不可用则使用备用方案
 """
 
-import pycorrector
 import re
 
 class TypoChecker:
     def __init__(self):
-        # 初始化 pycorrector
-        pass
+        # 尝试导入 pycorrector，如果失败则使用备用方案
+        self.use_pycorrector = False
+        try:
+            import pycorrector
+            self.pycorrector = pycorrector
+            self.use_pycorrector = True
+        except ImportError:
+            print("Warning: pycorrector not available, using fallback typo checker")
+            self.use_pycorrector = False
     
     def check_typos(self, text):
         """检查文本中的错别字"""
         issues = []
         
-        try:
-            # 使用 pycorrector 检测错别字
-            import pycorrector.corrector as corrector
-            corrected_sent, detail = corrector.correct(text)
-            
-            # 解析检测结果
-            for error in detail:
-                if len(error) >= 4:
-                    original_word = error[0]
-                    corrected_word = error[1]
-                    start_pos = error[2]
-                    end_pos = error[3]
-                    
-                    # 跳过相同的词
-                    if original_word != corrected_word:
-                        issues.append({
-                            'type': 'typo',
-                            'category': '错别字',
-                            'position': {
-                                'start': start_pos,
-                                'end': end_pos
-                            },
-                            'original': original_word,
-                            'suggestion': corrected_word,
-                            'description': f'可能的错别字: "{original_word}" → "{corrected_word}"',
-                            'severity': 'medium'
-                        })
+        if self.use_pycorrector:
+            try:
+                # 使用 pycorrector 检测错别字
+                corrected_sent, detail = self.pycorrector.correct(text)
+                
+                # 解析检测结果
+                for error in detail:
+                    if len(error) >= 4:
+                        original_word = error[0]
+                        corrected_word = error[1]
+                        start_pos = error[2]
+                        end_pos = error[3]
+                        
+                        # 跳过相同的词
+                        if original_word != corrected_word:
+                            issues.append({
+                                'type': 'typo',
+                                'category': '错别字',
+                                'position': {
+                                    'start': start_pos,
+                                    'end': end_pos
+                                },
+                                'original': original_word,
+                                'suggestion': corrected_word,
+                                'description': f'可能的错别字: "{original_word}" → "{corrected_word}"',
+                                'severity': 'medium'
+                            })
+            except Exception as e:
+                print(f"pycorrector 检查出错: {e}")
+                self.use_pycorrector = False  # 禁用 pycorrector
         
-        except Exception as e:
-            print(f"错别字检查出错: {e}")
+        # 如果 pycorrector 不可用，使用备用方案
+        if not self.use_pycorrector:
             # 简单的错别字检查作为备选方案
             common_typos = {
                 '反应': '反映',
