@@ -9,10 +9,10 @@ class PunctuationChecker:
     def __init__(self):
         # 中文标点符号
         self.chinese_punctuation = '，。！？；：""''（）【】《》'
-        # 英文标点符号
-        self.english_punctuation = ',.!?;:"\\'()[]<>'
+        # 英文标点符号 - 使用原始字符串避免转义问题
+        self.english_punctuation = r',.!?;:"\'()[]<>'
         
-        # 标点符号配对 - 修复语法错误
+        # 标点符号配对
         self.paired_punctuation = {
             '"': '"',
             "'": "'",
@@ -52,7 +52,7 @@ class PunctuationChecker:
         
         for english, chinese in replacements.items():
             # 查找英文标点在中文文本中的使用
-            pattern = f'[\\u4e00-\\u9fff]{re.escape(english)}'
+            pattern = r'[\u4e00-\u9fff]' + re.escape(english)
             matches = re.finditer(pattern, text)
             
             for match in matches:
