@@ -1,142 +1,151 @@
 """
-错别字检查服务
-使用 pycorrector 库进行错别字检测和纠正，如果不可用则使用备用方案
+错别字与语法检查模块
+优先使用 pycorrector，如不可用则回退至 Aho-Corasick + 规则
 """
 
 import re
+import time
+
+try:
+    import pycorrector  # type: ignore
+    PYCORRECTOR_AVAILABLE = True
+except Exception as e:
+    pycorrector = None
+    PYCORRECTOR_AVAILABLE = False
+
+try:
+    import ahocorasick  # type: ignore
+    AHO_AVAILABLE = True
+except Exception:
+    ahocorasick = None
+    AHO_AVAILABLE = False
+
+# 常见错别字混淆集（可扩展）
+COMMON_MIXUPS = {
+    '的地得': [('的', '地'), ('的', '得'), ('地', '的'), ('得', '的')],
+    '与与和': [('与', '和')],
+    '再在': [('再', '在'), ('在', '再')],
+    '因该应该': [('因该', '应该')],
+    '有意于有益于': [('有意于', '有益于')],
+    '作做': [('作', '做')],
+    '侯候': [('侯', '候')],
+    '象像': [('象', '像')],
+}
+
+# 预编译语法与常见错误模式
+GRAMMAR_PATTERNS = [
+    (re.compile(r"[一二两三四五六七八九十][个|名|位]{2,}"), '量词重复，建议保留一个'),
+    (re.compile(r"(被){2,}"), '可能存在被动语态叠用'),
+]
 
 class TypoChecker:
     def __init__(self):
-        # 尝试导入 pycorrector，如果失败则使用备用方案
-        self.use_pycorrector = False
-        try:
-            import pycorrector
-            self.pycorrector = pycorrector
-            self.use_pycorrector = True
-        except ImportError:
-            print("Warning: pycorrector not available, using fallback typo checker")
-            self.use_pycorrector = False
-    
-    def check_typos(self, text):
-        """检查文本中的错别字"""
+        self._init_automaton()
+        if PYCORRECTOR_AVAILABLE:
+            print('[TypoChecker] pycorrector is available and will be used for typo detection')
+        else:
+            print('[TypoChecker] pycorrector is NOT available; fallback to automaton + rules')
+
+    def _init_automaton(self):
+        self.automaton = None
+        if AHO_AVAILABLE:
+            automaton = ahocorasick.Automaton()
+            # 将所有混淆词加入自动机
+            for pairs in COMMON_MIXUPS.values():
+                for wrong, right in pairs:
+                    automaton.add_word(wrong, (wrong, right))
+            automaton.make_automaton()
+            self.automaton = automaton
+
+    def check_typos(self, text: str):
         issues = []
-        
-        if self.use_pycorrector:
-            try:
-                # 使用 pycorrector 检测错别字
-                corrected_sent, detail = self.pycorrector.correct(text)
-                
-                # 解析检测结果
-                for error in detail:
-                    if len(error) >= 4:
-                        original_word = error[0]
-                        corrected_word = error[1]
-                        start_pos = error[2]
-                        end_pos = error[3]
-                        
-                        # 跳过相同的词
-                        if original_word != corrected_word:
-                            issues.append({
-                                'type': 'typo',
-                                'category': '错别字',
-                                'position': {
-                                    'start': start_pos,
-                                    'end': end_pos
-                                },
-                                'original': original_word,
-                                'suggestion': corrected_word,
-                                'description': f'可能的错别字: "{original_word}" → "{corrected_word}"',
-                                'severity': 'medium'
-                            })
-            except Exception as e:
-                print(f"pycorrector 检查出错: {e}")
-                self.use_pycorrector = False  # 禁用 pycorrector
-        
-        # 如果 pycorrector 不可用，使用备用方案
-        if not self.use_pycorrector:
-            # 简单的错别字检查作为备选方案
-            common_typos = {
-                '反应': '反映',
-                '诗品': '诗歌',
-                '矛盾': '茅盾'
-            }
-            
-            for typo, correct in common_typos.items():
-                if typo in text:
-                    start_pos = text.find(typo)
-                    end_pos = start_pos + len(typo)
+        if PYCORRECTOR_AVAILABLE:
+            t0 = time.time()
+            # 句子级处理可显著提升长文本性能
+            sentences = re.split(r'([。！？\n])', text)
+            merged = []
+            # 将标点重新合并回句子
+            for i in range(0, len(sentences), 2):
+                s = sentences[i]
+                p = sentences[i+1] if i+1 < len(sentences) else ''
+                merged.append(s + p)
+            offset = 0
+            for s in merged:
+                corrected, details = pycorrector.correct(s)
+                for wrong, right, begin, end in details:
                     issues.append({
                         'type': 'typo',
-                        'category': '错别字',
+                        'message': f'疑似错别字："{wrong}" → "{right}"',
                         'position': {
-                            'start': start_pos,
-                            'end': end_pos
+                            'start': offset + begin,
+                            'end': offset + end
                         },
-                        'original': typo,
-                        'suggestion': correct,
-                        'description': f'可能的错别字: "{typo}" → "{correct}"',
-                        'severity': 'medium'
+                        'suggestions': [right],
+                        'severity': 'warning'
                     })
+                offset += len(s)
+            print(f"[TypoChecker] pycorrector typos took {time.time() - t0:.2f}s, sentences={len(merged)}")
+            return issues
         
+        # Fallback: Aho-Corasick + 简单规则
+        if self.automaton:
+            for end_idx, (wrong, right) in self.automaton.iter(text):
+                start_idx = end_idx - len(wrong) + 1
+                issues.append({
+                    'type': 'typo',
+                    'message': f'疑似错别字："{wrong}" → "{right}"',
+                    'position': {
+                        'start': start_idx,
+                        'end': end_idx + 1
+                    },
+                    'suggestions': [right],
+                    'severity': 'warning'
+                })
+        else:
+            # 如果自动机不可用，回退到简单查找
+            for pairs in COMMON_MIXUPS.values():
+                for wrong, right in pairs:
+                    start = 0
+                    while True:
+                        idx = text.find(wrong, start)
+                        if idx == -1:
+                            break
+                        issues.append({
+                            'type': 'typo',
+                            'message': f'疑似错别字："{wrong}" → "{right}"',
+                            'position': {
+                                'start': idx,
+                                'end': idx + len(wrong)
+                            },
+                            'suggestions': [right],
+                            'severity': 'warning'
+                        })
+                        start = idx + len(wrong)
         return issues
-    
-    def check_grammar(self, text):
-        """基础语法检查"""
+
+    def check_grammar(self, text: str):
         issues = []
-        
-        # 检查常见语法问题
-        grammar_patterns = [
-            {
-                'pattern': r'的地得',
-                'description': '"的地得"使用可能有误',
-                'category': '语法问题'
-            },
-            {
-                'pattern': r'因为.*所以',
-                'description': '"因为...所以"句式可能冗余',
-                'category': '语法问题'
-            },
-            {
-                'pattern': r'虽然.*但是',
-                'description': '"虽然...但是"句式检查',
-                'category': '语法问题'
-            }
-        ]
-        
-        for pattern_info in grammar_patterns:
-            pattern = pattern_info['pattern']
-            matches = re.finditer(pattern, text)
-            
-            for match in matches:
+        for pattern, msg in GRAMMAR_PATTERNS:
+            for m in pattern.finditer(text):
                 issues.append({
                     'type': 'grammar',
-                    'category': pattern_info['category'],
+                    'message': msg,
                     'position': {
-                        'start': match.start(),
-                        'end': match.end()
+                        'start': m.start(),
+                        'end': m.end()
                     },
-                    'original': match.group(),
-                    'suggestion': '',
-                    'description': pattern_info['description'],
-                    'severity': 'low'
+                    'suggestions': [],
+                    'severity': 'info'
                 })
-        
         return issues
 
-# 创建全局实例
-typo_checker = TypoChecker()
 
-def check_typos_and_grammar(text):
-    """检查错别字和语法问题"""
+# 模块级单例，避免重复初始化
+_typo_checker_singleton = TypoChecker()
+
+def check_typos_and_grammar(text: str):
     issues = []
-    
-    # 检查错别字
-    typo_issues = typo_checker.check_typos(text)
-    issues.extend(typo_issues)
-    
-    # 检查语法
-    grammar_issues = typo_checker.check_grammar(text)
-    issues.extend(grammar_issues)
-    
+    issues.extend(_typo_checker_singleton.check_typos(text))
+    issues.extend(_typo_checker_singleton.check_grammar(text))
     return issues
 
