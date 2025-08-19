@@ -1,7 +1,9 @@
 // API配置文件
+const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV
+
 const API_CONFIG = {
-  // 生产环境API地址
-  BASE_URL: 'https://intelligent-proofreader-api.onrender.com',
+  // 根据环境选择 API 地址：开发走相对路径，通过 Vite 代理；生产直连后端域名
+  BASE_URL: isDev ? '' : 'https://intelligent-proofreader-api.onrender.com',
   
   // API端点
   ENDPOINTS: {
@@ -17,7 +19,7 @@ const API_CONFIG = {
   },
   
   // 超时设置
-  TIMEOUT: 30000, // 30秒
+  TIMEOUT: 30000, // 30秒（具体请求可覆盖）
 };
 
 // 获取完整的API URL

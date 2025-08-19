@@ -4,38 +4,27 @@ import Toolbar from './components/Toolbar'
 import Editor from './components/Editor'
 import IssuePanel from './components/IssuePanel'
 import ApiService from './services/api'
+import { 
+  ResizablePanelGroup, 
+  ResizablePanel, 
+  ResizableHandle 
+} from "@/components/ui/resizable.jsx"
 import './App.css'
 
 function App() {
   const [content, setContent] = useState('')
   const [issues, setIssues] = useState([])
-  const [isProofreading, setIsProofreading] = useState(false)
   const [checkOptions, setCheckOptions] = useState({
     grammar: true,
-    terminology: true,
     punctuation: true,
-    sensitive: true
+    sensitive: false
   })
-  
-  // 示例内容
-  useEffect(() => {
-    const sampleContent = `第三章 现代文学的发展与变革
-
-20世纪初期，中国社会经历了剧烈的变革，这种变革也深刻影响了文学的发展。新文化运动的兴起，打破了传统文学的桎梏，为现代文学的产生创造了条件。陈独秀、李大钊等先驱者倡导文学革命，主张用白话文取代文言文，使文学更贴近大众。
-
-在这个时期，出现了一批具有开创性的作家。鲁迅的《狂人日记》是中国现代文学史上第一篇白话小说，反应了封建礼教吃人的本质，具有划时代的意义。矛盾、巴金、老舍等作家也创作了大量优秀作品，深刻描绘了社会现实和人民的苦难。
-
-3.1 文学研究会与创造社
-
-1921年，文学研究会在上海成立，主张"为人生而艺术"，强调文学应反映社会现实，关注人民生活。叶圣陶、冰心等都是文学研究会的重要成员。他们的作品风格朴实，语言通俗易懂，深受读者喜爱。
-
-同年，创造社在日本东京成立，由郭沫若、郁达夫等留学日本的青年组成。创造社主张"为艺术而艺术"，更注重文学的抒情性和艺术感染力。郭沫若的诗品气势磅礴，充满激情，对后世产生了深远影响。`
-    
-    setContent(sampleContent)
-  }, [])
+  const [selectedIssueId, setSelectedIssueId] = useState(null)
+  const [isProofreading, setIsProofreading] = useState(false)
   
   // 处理文档审校
   const handleProofread = async () => {
+    if (isProofreading) return
     if (!content.trim()) {
       alert('请先输入或上传文档内容')
       return
@@ -44,12 +33,25 @@ function App() {
     setIsProofreading(true)
     
     try {
+      // 先做健康检查，给出更友好的错误提示
+      try {
+        await ApiService.healthCheck()
+      } catch (e) {
+        console.warn('健康检查失败，可能是服务不可用，但仍尝试继续请求')
+      }
+
       const response = await ApiService.proofreadDocument(content, checkOptions)
       
       if (response.success) {
-        setIssues(response.data.issues || [])
+        const rawIssues = response.data.issues || []
+        // 规范化：确保每条 issue 都有 id
+        const normalized = rawIssues.map((it, idx) => ({
+          id: it.id || `${it.type || 'issue'}-${it.position?.start ?? idx}-${it.position?.end ?? idx}-${idx}`,
+          ...it,
+        }))
+        setIssues(normalized)
       } else {
-        alert('审校失败: ' + response.error?.message)
+        alert('审校失败: ' + (response.error?.message || '未知错误'))
       }
     } catch (error) {
       console.error('审校错误:', error)
@@ -59,7 +61,7 @@ function App() {
     }
   }
   
-  // 处理文件上传
+  // 处理文件上传（来自 Editor）
   const handleFileUpload = (file, text) => {
     setContent(text)
     setIssues([]) // 清空之前的问题
@@ -96,7 +98,15 @@ function App() {
   const handleIssueClick = (issue) => {
     // 可以在这里实现滚动到对应位置的逻辑
     console.log('点击问题:', issue)
+    setSelectedIssueId(issue?.id || null)
   }
+  
+  // 如果当前选中的问题不在列表里了（被忽略/被修复），清空选中
+  useEffect(() => {
+    if (selectedIssueId && !issues.some(i => i.id === selectedIssueId)) {
+      setSelectedIssueId(null)
+    }
+  }, [issues, selectedIssueId])
   
   // 处理导出
   const handleExportPDF = async () => {
@@ -125,30 +135,44 @@ function App() {
       />
       
       <div className="flex-1 flex overflow-hidden">
-        <Toolbar 
-          onUpload={() => console.log('上传')}
-          onProofread={handleProofread}
-          onManualEdit={() => console.log('手动编辑')}
-          onGenerateReport={() => console.log('生成报告')}
-          checkOptions={checkOptions}
-          onCheckOptionChange={handleCheckOptionChange}
-          isProofreading={isProofreading}
-        />
-        
-        <Editor 
-          content={content}
-          onContentChange={setContent}
-          issues={issues}
-          onIssueClick={handleIssueClick}
-          onFileUpload={handleFileUpload}
-        />
-        
-        <IssuePanel 
-          issues={issues}
-          onAcceptSuggestion={handleAcceptSuggestion}
-          onIgnoreIssue={handleIgnoreIssue}
-          onIssueClick={handleIssueClick}
-        />
+        <ResizablePanelGroup direction="horizontal">
+          <ResizablePanel defaultSize={20} minSize={15} maxSize={25}>
+            <Toolbar 
+              onUpload={() => {
+                // 直接使用暴露的全局方法打开文件对话框
+                if (typeof window !== 'undefined' && typeof window.openUploadDialog === 'function') {
+                  window.openUploadDialog()
+                }
+              }}
+              onProofread={handleProofread}
+              onManualEdit={() => console.log('手动编辑')}
+              onGenerateReport={() => console.log('生成报告')}
+              checkOptions={checkOptions}
+              onCheckOptionChange={handleCheckOptionChange}
+              isProofreading={isProofreading}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={55} minSize={30}>
+            <Editor 
+              content={content}
+              onContentChange={setContent}
+              issues={issues}
+              onIssueClick={handleIssueClick}
+              onFileUpload={handleFileUpload}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={25} minSize={15} maxSize={35}>
+            <IssuePanel 
+              issues={issues}
+              onAcceptSuggestion={handleAcceptSuggestion}
+              onIgnoreIssue={handleIgnoreIssue}
+              onIssueClick={handleIssueClick}
+              selectedIssueId={selectedIssueId}
+            />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </div>
   )
