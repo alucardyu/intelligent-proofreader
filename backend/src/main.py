@@ -3,9 +3,10 @@ import sys
 # DON'T CHANGE THIS !!!
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 from src.routes.proofreading import proofreading_bp
+import datetime
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 app.config['SECRET_KEY'] = 'asdf#FGSgvasgf$5$WGT'
@@ -16,10 +17,23 @@ CORS(app)
 # 注册审校路由
 app.register_blueprint(proofreading_bp, url_prefix='/api')
 
-# 简单的健康检查路由
+# 简单的健康检查路由（与蓝图 /api/health 保持一致结构）
 @app.route('/api/health')
 def health_check():
-    return {'status': 'healthy', 'message': 'Intelligent Proofreader API is running'}
+    qwen_enabled = bool(os.getenv("QWEN_API_KEY", "").strip())
+    return jsonify({
+        'success': True,
+        'message': 'Service is running',
+        'timestamp': datetime.datetime.now().isoformat(),
+        'qwen_enabled': qwen_enabled,
+        'features': {
+            'typo_check': True,
+            'grammar_check': True,
+            'punctuation_check': True,
+            'sensitive_check': True,
+            'llm_proofreading': qwen_enabled
+        }
+    })
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
