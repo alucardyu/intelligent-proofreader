@@ -7,6 +7,7 @@ from src.services.proofreading_engine import proofreading_engine
 from src.services.document_service import document_service
 import io
 import datetime
+import os
 
 proofreading_bp = Blueprint('proofreading', __name__)
 
@@ -109,9 +110,20 @@ def export_word():
 @proofreading_bp.route('/health', methods=['GET'])
 def health_check():
     """健康检查接口"""
+    # 检查 Qwen 配置状态（不泄露密钥值）
+    qwen_enabled = bool(os.getenv("QWEN_API_KEY", "").strip())
+    
     return jsonify({
         'success': True,
         'message': 'Service is running',
-        'timestamp': datetime.datetime.now().isoformat()
+        'timestamp': datetime.datetime.now().isoformat(),
+        'qwen_enabled': qwen_enabled,
+        'features': {
+            'typo_check': True,
+            'grammar_check': True,
+            'punctuation_check': True,
+            'sensitive_check': True,
+            'llm_proofreading': qwen_enabled
+        }
     })
 

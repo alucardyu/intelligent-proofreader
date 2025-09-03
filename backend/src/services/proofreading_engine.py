@@ -59,6 +59,63 @@ class ProofreadingEngine:
         # 按位置排序
         all_issues.sort(key=lambda x: x['position']['start'])
         
+        # 新增：权重与去噪处理（上调标点权重、突出LLM风格与语法、敏感可见度）
+        def _weight(issue):
+            t = issue.get('type')
+            sev = issue.get('severity', '')
+            source = issue.get('source', '')
+            subtype = issue.get('subtype', '')
+            
+            # 基础权重：LLM style > typo > grammar/sensitive > punctuation
+            if source == 'qwen' and subtype == 'style':
+                base = 4.5
+            elif t == 'typo':
+                base = 3.0
+            elif t == 'grammar':
+                base = 2.7 if source == 'qwen' else 2.2
+            elif t == 'sensitive':
+                base = 2.6
+            elif t == 'punctuation':
+                base = 1.25  # 从0.8上调至1.25，提高可见度
+            else:
+                base = 1.0
+                
+            # severity 加成：high>medium>low
+            sev_bonus = {'high': 1.0, 'medium': 0.5, 'low': 0.0, 'warning': 0.5, 'info': 0.2}.get(sev, 0.0)
+            return base + sev_bonus
+        
+        # 重叠和解：同一区间优先保留权重高者
+        suppressed = [False] * len(all_issues)
+        for i in range(len(all_issues)):
+            if suppressed[i]:
+                continue
+            a = all_issues[i]
+            a_s, a_e = a['position']['start'], a['position']['end']
+            for j in range(i+1, len(all_issues)):
+                if suppressed[j]:
+                    continue
+                b = all_issues[j]
+                b_s, b_e = b['position']['start'], b['position']['end']
+                # 有交集则和解
+                if not (b_s >= a_e or b_e <= a_s):
+                    if _weight(b) > _weight(a):
+                        suppressed[i] = True
+                        break
+                    else:
+                        suppressed[j] = True
+        filtered_issues = [it for k, it in enumerate(all_issues) if not suppressed[k]]
+        
+        # 分离 LLM style 和其他类型，确保 LLM style 优先展示
+        llm_style = [it for it in filtered_issues if it.get('source') == 'qwen' and it.get('subtype') == 'style']
+        punct = [it for it in filtered_issues if it.get('type') == 'punctuation']
+        other = [it for it in filtered_issues if it not in llm_style and it not in punct]
+        
+        # 对标点进行温和限流（最多前 12 条），但较之前更宽松
+        punct = punct[:12]
+        
+        # 重组：LLM style + 其他问题 + 有限标点
+        all_issues = llm_style + other + punct
+        
         # 统计信息
         statistics = self._calculate_statistics(all_issues)
         
@@ -74,6 +131,23 @@ class ProofreadingEngine:
     def _process_single(self, content, options):
         """处理单个文本块"""
         all_issues = []
+        
+        # 0. 千问大模型辅助审校（可选）
+        if options.get('qwen', True):
+            qwen_start = time.time()
+            try:
+                qwen_result = self.qwen_proofreader.proofread(content)
+                qwen_issues = qwen_result.get('issues', [])
+                # 简单去重：基于 (start,end,message)
+                seen = set()
+                for issue in qwen_issues:
+                    key = (issue['position']['start'], issue['position']['end'], issue['message'])
+                    if key not in seen:
+                        all_issues.append(issue)
+                        seen.add(key)
+                print(f"[Performance] Qwen check: {time.time() - qwen_start:.2f}s, issues: {len(qwen_issues)}")
+            except Exception as e:
+                print(f"[Qwen] 调用失败，跳过大模型审校：{str(e)}")
         
         # 1. 错别字和语法检查
         if options.get('check_typos', True) or options.get('check_grammar', True):
@@ -93,8 +167,50 @@ class ProofreadingEngine:
         if options.get('check_sensitive', True):
             sensitive_start = time.time()
             sensitive_issues = check_sensitive_content(content)
+        
+            # 混合方案：DFA 召回 + LLM 解释与重写（可选，静默降级）
+            try:
+                if options.get('qwen', True) and sensitive_issues:
+                    detections = []
+                    for it in sensitive_issues:
+                        pos = it.get('position') or {}
+                        s = pos.get('start'); e = pos.get('end')
+                        if isinstance(s, int) and isinstance(e, int) and 0 <= s < e <= len(content):
+                            detections.append({
+                                'start': s,
+                                'end': e,
+                                'word': content[s:e],
+                                'category': it.get('category') or '敏感内容'
+                            })
+                    if detections:
+                        exps = self.qwen_proofreader.explain_sensitive(content, detections)
+                        # 按区间索引合并
+                        exp_map = { (ex['start'], ex['end']): ex for ex in exps }
+                        for it in sensitive_issues:
+                            pos = it.get('position') or {}
+                            key = (pos.get('start'), pos.get('end'))
+                            ex = exp_map.get(key)
+                            if ex and ex.get('corrected'):
+                                reason = (ex.get('reason') or '优化表述').strip()
+                                corrected = ex.get('corrected').strip()
+                                # 用更安全的改写替换建议，同时补充友好解释
+                                it['suggestion'] = corrected
+                                # 兼容前端：message/description 至少一项包含解释
+                                category = it.get('category') or '敏感内容'
+                                msg = f"敏感内容（{category}）：{reason}"
+                                if 'message' not in it or not it.get('message'):
+                                    it['message'] = msg
+                                # 保留原描述，或叠加解释
+                                desc = (it.get('description') or '').strip()
+                                it['description'] = (desc + ('；' if desc else '') + reason)[:120]
+                                it['source'] = it.get('source') or 'hybrid'
+                                it['subtype'] = it.get('subtype') or 'sensitive_explain'
+            except Exception as e:
+                # 安全降级：不中断流程
+                print(f"[Sensitive-Hybrid] 解释阶段降级：{str(e)}")
+
             all_issues.extend(sensitive_issues)
-            print(f"[Performance] Sensitive content check: {time.time() - sensitive_start:.2f}s")
+            print(f"[Performance] Sensitive content check: {time.time() - sensitive_start:.2f}s, issues: {len(sensitive_issues)}")
         
         return all_issues
     
@@ -108,7 +224,7 @@ class ProofreadingEngine:
             
             chunk_issues = self._process_single(chunk_text, options)
             
-            # 调整位置偏移
+            # 调整位置偏移（全局偏移）
             for issue in chunk_issues:
                 issue['position']['start'] += chunk_offset
                 issue['position']['end'] += chunk_offset

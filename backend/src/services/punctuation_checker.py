@@ -120,23 +120,24 @@ class PunctuationChecker:
         """检查标点符号位置"""
         issues = []
         
-        # 检查句号、问号、感叹号后是否有空格
-        pattern = r'[。！？][^\s\n]'
-        matches = re.finditer(pattern, text)
-        
-        for match in matches:
-            issues.append({
-                'type': 'punctuation',
-                'category': '标点符号',
-                'position': {
-                    'start': match.start() + 1,
-                    'end': match.end()
-                },
-                'original': match.group(),
-                'suggestion': match.group()[0] + ' ' + match.group()[1],
-                'description': '句号、问号、感叹号后建议添加空格',
-                'severity': 'low'
-            })
+        # 临时禁用"句号后空格"规则，因为在中文写作中通常不需要
+        # 如果未来需要可以通过配置重新启用
+        # pattern = r'[。！？][^\s\n]'
+        # matches = re.finditer(pattern, text)
+        # 
+        # for match in matches:
+        #     issues.append({
+        #         'type': 'punctuation',
+        #         'category': '标点符号',
+        #         'position': {
+        #             'start': match.start() + 1,
+        #             'end': match.end()
+        #         },
+        #         'original': match.group(),
+        #         'suggestion': match.group()[0] + ' ' + match.group()[1],
+        #         'description': '句号、问号、感叹号后建议添加空格',
+        #         'severity': 'low'
+        #     })
         
         return issues
 
