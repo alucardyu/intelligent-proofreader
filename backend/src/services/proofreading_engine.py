@@ -17,6 +17,12 @@ class ProofreadingEngine:
         # 长文本分块阈值
         self.chunk_size = 5000
         self.qwen_proofreader = QwenProofreader()
+        # 规则模式：'off' | 'lite' | 'full'（默认 lite）
+        self.default_rules_mode = 'lite'
+        # 每段规则 typo 上限（只对 lite/full 生效）
+        self.rule_typos_per_paragraph_limit = 3
+        # 与 LLM 建议的窗口抑制（字符）
+        self.window_suppress_radius = 25
     
     def proofread(self, content, options=None):
         """
@@ -40,8 +46,13 @@ class ProofreadingEngine:
                 'check_typos': True,
                 'check_grammar': True,
                 'check_punctuation': True,
-                'check_sensitive': True
+                'check_sensitive': True,
+                'qwen': True,
+                'rules_mode': self.default_rules_mode
             }
+        else:
+            # 补充默认 rules_mode
+            options.setdefault('rules_mode', self.default_rules_mode)
         
         all_issues = []
         
@@ -131,7 +142,7 @@ class ProofreadingEngine:
     def _process_single(self, content, options):
         """处理单个文本块"""
         all_issues = []
-        
+        rules_mode = options.get('rules_mode', self.default_rules_mode)
         # 0. 千问大模型辅助审校（可选）
         if options.get('qwen', True):
             qwen_start = time.time()
@@ -141,33 +152,44 @@ class ProofreadingEngine:
                 # 简单去重：基于 (start,end,message)
                 seen = set()
                 for issue in qwen_issues:
-                    key = (issue['position']['start'], issue['position']['end'], issue['message'])
+                    key = (issue['position']['start'], issue['position']['end'], issue.get('message'))
                     if key not in seen:
                         all_issues.append(issue)
                         seen.add(key)
                 print(f"[Performance] Qwen check: {time.time() - qwen_start:.2f}s, issues: {len(qwen_issues)}")
             except Exception as e:
                 print(f"[Qwen] 调用失败，跳过大模型审校：{str(e)}")
-        
         # 1. 错别字和语法检查
         if options.get('check_typos', True) or options.get('check_grammar', True):
             typo_start = time.time()
             typo_issues = check_typos_and_grammar(content)
+            # 规则模式裁剪
+            if rules_mode in ('lite', 'off'):
+                filtered = []
+                for it in typo_issues:
+                    if rules_mode == 'off':
+                        continue  # 全部忽略规则 typo/grammar
+                    t = it.get('type')
+                    st = it.get('subtype')
+                    sev = it.get('severity')
+                    # 过滤低价值功能词型 typo
+                    if t == 'typo' and st == 'function_word':
+                        # 在 lite 模式下默认不进入列表（折叠）
+                        continue
+                    filtered.append(it)
+                typo_issues = filtered
             all_issues.extend(typo_issues)
             print(f"[Performance] Typo/Grammar check: {time.time() - typo_start:.2f}s")
-        
         # 2. 标点符号检查
         if options.get('check_punctuation', True):
             punct_start = time.time()
             punctuation_issues = check_punctuation(content)
             all_issues.extend(punctuation_issues)
             print(f"[Performance] Punctuation check: {time.time() - punct_start:.2f}s")
-        
         # 3. 敏感内容检查
         if options.get('check_sensitive', True):
             sensitive_start = time.time()
             sensitive_issues = check_sensitive_content(content)
-        
             # 混合方案：DFA 召回 + LLM 解释与重写（可选，静默降级）
             try:
                 if options.get('qwen', True) and sensitive_issues:
@@ -195,12 +217,10 @@ class ProofreadingEngine:
                                 corrected = ex.get('corrected').strip()
                                 # 用更安全的改写替换建议，同时补充友好解释
                                 it['suggestion'] = corrected
-                                # 兼容前端：message/description 至少一项包含解释
                                 category = it.get('category') or '敏感内容'
                                 msg = f"敏感内容（{category}）：{reason}"
                                 if 'message' not in it or not it.get('message'):
                                     it['message'] = msg
-                                # 保留原描述，或叠加解释
                                 desc = (it.get('description') or '').strip()
                                 it['description'] = (desc + ('；' if desc else '') + reason)[:120]
                                 it['source'] = it.get('source') or 'hybrid'
@@ -208,10 +228,115 @@ class ProofreadingEngine:
             except Exception as e:
                 # 安全降级：不中断流程
                 print(f"[Sensitive-Hybrid] 解释阶段降级：{str(e)}")
-
             all_issues.extend(sensitive_issues)
             print(f"[Performance] Sensitive content check: {time.time() - sensitive_start:.2f}s, issues: {len(sensitive_issues)}")
-        
+        # === 规则 Lite 抑制：靠近 LLM 的规则建议抑制 + 每段上限 ===
+        if rules_mode in ('lite', 'full'):
+            # 1) 计算 LLM 区间集合
+            llm_ranges = []
+            for it in all_issues:
+                src = it.get('source', '')
+                if src == 'qwen':
+                    pos = it.get('position') or {}
+                    s = pos.get('start'); e = pos.get('end')
+                    if isinstance(s, int) and isinstance(e, int):
+                        llm_ranges.append((s, e))
+            # 2) 窗口抑制与分段上限
+            suppressed = []
+            kept = []
+            # 简易段落切分：以换行作为段界
+            paragraph_id_by_pos = {}
+            pid = 0; last = 0
+            for i,ch in enumerate(content):
+                if ch == '\n':
+                    for k in range(last, i+1):
+                        paragraph_id_by_pos[k] = pid
+                    last = i+1; pid += 1
+            for k in range(last, len(content)):
+                paragraph_id_by_pos[k] = pid
+            per_para_count = {}
+            for it in all_issues:
+                t = it.get('type')
+                src = it.get('source', '')
+                st = it.get('subtype')
+                if t in ('typo','grammar') and src != 'qwen':
+                    pos = it.get('position') or {}
+                    s = pos.get('start'); e = pos.get('end')
+                    if not (isinstance(s,int) and isinstance(e,int)):
+                        suppressed.append(it); continue
+                    # 窗口抑制：靠近任何 LLM 区间则抑制（仅 lite）
+                    if rules_mode == 'lite':
+                        near_llm = False
+                        for ls, le in llm_ranges:
+                            if max(0, min(e, le) - max(s, ls)) > 0:
+                                near_llm = True; break
+                            if abs(s - le) <= self.window_suppress_radius or abs(ls - e) <= self.window_suppress_radius:
+                                near_llm = True; break
+                        if near_llm:
+                            suppressed.append(it); continue
+                    # 每段上限
+                    pid_s = paragraph_id_by_pos.get(s, 0)
+                    cnt = per_para_count.get(pid_s, 0)
+                    limit = self.rule_typos_per_paragraph_limit if t == 'typo' else 3
+                    if cnt >= limit:
+                        suppressed.append(it); continue
+                    per_para_count[pid_s] = cnt + 1
+                    kept.append(it)
+                else:
+                    kept.append(it)
+            all_issues = kept
+        # === 权重、重叠和解、重组 ===
+        # 按位置排序
+        all_issues.sort(key=lambda x: x['position']['start'])
+        # 权重计算
+        def _weight(issue):
+            t = issue.get('type')
+            sev = issue.get('severity', '')
+            source = issue.get('source', '')
+            subtype = issue.get('subtype', '')
+            # 基础权重
+            if source == 'qwen' and subtype == 'style':
+                base = 4.0  # 略降
+            elif t == 'typo':
+                if subtype == 'function_word':
+                    base = 0.5  # 明显下调
+                elif subtype == 'high_value':
+                    base = 3.0
+                else:
+                    base = 2.2
+            elif t == 'grammar':
+                base = 2.5 if source == 'qwen' else 2.0
+            elif t == 'sensitive':
+                base = 2.6
+            elif t == 'punctuation':
+                base = 1.25
+            else:
+                base = 1.0
+            sev_bonus = {'high': 1.0, 'medium': 0.5, 'low': 0.0, 'warning': 0.2, 'info': 0.1}.get(sev, 0.0)
+            return base + sev_bonus
+        # 重叠和解
+        suppressed = [False] * len(all_issues)
+        for i in range(len(all_issues)):
+            if suppressed[i]:
+                continue
+            a = all_issues[i]; a_s, a_e = a['position']['start'], a['position']['end']
+            for j in range(i+1, len(all_issues)):
+                if suppressed[j]:
+                    continue
+                b = all_issues[j]; b_s, b_e = b['position']['start'], b['position']['end']
+                if not (b_s >= a_e or b_e <= a_s):
+                    if _weight(b) > _weight(a):
+                        suppressed[i] = True; break
+                    else:
+                        suppressed[j] = True
+        filtered_issues = [it for k, it in enumerate(all_issues) if not suppressed[k]]
+        # 组装展示顺序
+        llm_style = [it for it in filtered_issues if it.get('source') == 'qwen' and it.get('subtype') == 'style']
+        punct = [it for it in filtered_issues if it.get('type') == 'punctuation']
+        other = [it for it in filtered_issues if it not in llm_style and it not in punct]
+        # 标点限流
+        punct = punct[:12]
+        all_issues = llm_style + other + punct
         return all_issues
     
     def _process_chunked(self, content, options):

@@ -55,6 +55,17 @@ FALSE_POSITIVE_WHITELIST = {
     '技术', '开发', '设计', '测试', '维护', '支持', '管理', '培训', '学习', '成长'
 }
 
+# 低信号功能词集合（便于在引擎层做 Lite 过滤）
+FUNCTION_WORDS = {
+    '的', '地', '得', '在', '再', '了', '和', '与', '及', '而', '被', '把', '就', '都', '也'
+}
+
+# 高价值错别字白名单（可持续扩充）
+HIGH_VALUE_PAIRS = {
+    ('参予', '参与'),
+    ('显注', '显著'),
+}
+
 class TypoChecker:
     def __init__(self):
         self._init_automaton()
@@ -123,6 +134,14 @@ class TypoChecker:
         
         return dp[m][n]
 
+    def _classify_typo(self, wrong: str, right: str):
+        """为错别字建议打标签：function_word / high_value / general，并返回建议的严重度。"""
+        if len(wrong) == 1 and len(right) == 1 and (wrong in FUNCTION_WORDS or right in FUNCTION_WORDS):
+            return 'function_word', 'low'
+        if (wrong, right) in HIGH_VALUE_PAIRS or len(wrong) >= 2 or len(right) >= 2:
+            return 'high_value', 'medium'
+        return 'general', 'warning'
+
     def check_typos(self, text: str):
         issues = []
         if PYCORRECTOR_AVAILABLE:
@@ -142,7 +161,7 @@ class TypoChecker:
                     # 增加验证步骤，过滤误报
                     if not self._is_valid_typo(wrong, right):
                         continue
-                    
+                    subtype, sev = self._classify_typo(wrong, right)
                     issues.append({
                         'type': 'typo',
                         'message': f'疑似错别字："{wrong}" → "{right}"',
@@ -153,7 +172,8 @@ class TypoChecker:
                             'end': offset + end
                         },
                         'suggestions': [right],
-                        'severity': 'warning'
+                        'severity': sev,
+                        'subtype': subtype
                     })
                 offset += len(s)
             print(f"[TypoChecker] pycorrector typos took {time.time() - t0:.2f}s, sentences={len(merged)}, valid_issues={len(issues)}")
@@ -163,6 +183,7 @@ class TypoChecker:
         if self.automaton:
             for end_idx, (wrong, right) in self.automaton.iter(text):
                 start_idx = end_idx - len(wrong) + 1
+                subtype, sev = self._classify_typo(wrong, right)
                 issues.append({
                     'type': 'typo',
                     'message': f'疑似错别字："{wrong}" → "{right}"',
@@ -173,7 +194,8 @@ class TypoChecker:
                         'end': end_idx + 1
                     },
                     'suggestions': [right],
-                    'severity': 'warning'
+                    'severity': sev,
+                    'subtype': subtype
                 })
         else:
             # 如果自动机不可用，回退到简单查找
@@ -184,6 +206,7 @@ class TypoChecker:
                         idx = text.find(wrong, start)
                         if idx == -1:
                             break
+                        subtype, sev = self._classify_typo(wrong, right)
                         issues.append({
                             'type': 'typo',
                             'message': f'疑似错别字："{wrong}" → "{right}"',
@@ -194,7 +217,8 @@ class TypoChecker:
                                 'end': idx + len(wrong)
                             },
                             'suggestions': [right],
-                            'severity': 'warning'
+                            'severity': sev,
+                            'subtype': subtype
                         })
                         start = idx + len(wrong)
         return issues
