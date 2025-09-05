@@ -23,7 +23,16 @@ class ProofreadingEngine:
         self.rule_typos_per_paragraph_limit = 3
         # 与 LLM 建议的窗口抑制（字符）
         self.window_suppress_radius = 25
-    
+        # 典型混淆对的白名单短语，避免明显误判
+        self.whitelist_confusions = {
+            ('象', '像'): {
+                '前后': {'象棋', '印象', '现象', '形象', '气象', '象征', '抽象', '大象', '海象', '象牙', '象限', '象形'},
+            },
+            ('作', '做'): {
+                '后缀': {'作品', '工作', '作业', '作文', '作为', '作用', '作风', '作答', '作战', '作废'},
+            },
+        }
+
     def proofread(self, content, options=None):
         """
         对文本进行全面审校
@@ -163,18 +172,23 @@ class ProofreadingEngine:
         if options.get('check_typos', True) or options.get('check_grammar', True):
             typo_start = time.time()
             typo_issues = check_typos_and_grammar(content)
+            # 先做白名单误判过滤（规则输出）
+            typo_issues = [it for it in typo_issues if not self._is_false_positive_confusion(content, it)]
             # 规则模式裁剪
             if rules_mode in ('lite', 'off'):
                 filtered = []
+                FUNCTION_WORDS = {'的','地','得','在','再'}
                 for it in typo_issues:
                     if rules_mode == 'off':
                         continue  # 全部忽略规则 typo/grammar
                     t = it.get('type')
                     st = it.get('subtype')
-                    sev = it.get('severity')
-                    # 过滤低价值功能词型 typo
-                    if t == 'typo' and st == 'function_word':
-                        # 在 lite 模式下默认不进入列表（折叠）
+                    orig = (it.get('original') or '').strip()
+                    sug = (it.get('suggestion') or '').strip()
+                    # 过滤低价值功能词（覆盖 typo 与 grammar），含 subtype 与兜底匹配
+                    if t in ('typo', 'grammar') and (
+                        st == 'function_word' or orig in FUNCTION_WORDS or (sug and sug in FUNCTION_WORDS)
+                    ):
                         continue
                     filtered.append(it)
                 typo_issues = filtered
