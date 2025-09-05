@@ -33,6 +33,53 @@ class ProofreadingEngine:
             },
         }
 
+    def _is_false_positive_confusion(self, content: str, issue: dict) -> bool:
+        """
+        使用白名单短语过滤常见混淆字在固定搭配中的误报（如“象/像”“作/做”）。
+        仅对 type == 'typo' 且 original/suggestion 为单字的场景生效；
+        通过命中位置左右 1 字构成的 2 字短语进行匹配：
+          - '前后'：检查 [左+当前] 与 [当前+右]
+          - '后缀'：检查 [当前+右]
+        若命中白名单短语则返回 True（表示应过滤）。
+        """
+        try:
+            if issue.get('type') != 'typo':
+                return False
+            orig = (issue.get('original') or '').strip()
+            sug = (issue.get('suggestion') or '').strip()
+            if len(orig) != 1 or len(sug) != 1:
+                return False
+
+            pos = issue.get('position') or {}
+            s = pos.get('start'); e = pos.get('end')
+            if not (isinstance(s, int) and isinstance(e, int) and 0 <= s < e <= len(content)):
+                return False
+
+            cur = content[s:e]
+            # original 与文本不一致时，保守处理为不进行白名单过滤
+            if len(cur) != 1:
+                return False
+
+            left = content[s-1:s] if s - 1 >= 0 else ''
+            right = content[e:e+1] if e < len(content) else ''
+
+            for (a, b), cfg in self.whitelist_confusions.items():
+                # 支持 (orig->sug) 或 (sug->orig) 两种方向
+                if (orig, sug) != (a, b) and (orig, sug) != (b, a):
+                    continue
+                # 前后短语匹配
+                phrases = cfg.get('前后', set()) or set()
+                if (left and (left + cur) in phrases) or (right and (cur + right) in phrases):
+                    return True
+                # 后缀短语匹配（仅当前+右）
+                suffixes = cfg.get('后缀', set()) or set()
+                if right and (cur + right) in suffixes:
+                    return True
+            return False
+        except Exception:
+            # 任何异常都不应影响主流程，保守地认为不是误报
+            return False
+
     def proofread(self, content, options=None):
         """
         对文本进行全面审校
