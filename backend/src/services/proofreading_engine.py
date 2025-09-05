@@ -18,7 +18,7 @@ class ProofreadingEngine:
         self.chunk_size = 5000
         self.qwen_proofreader = QwenProofreader()
         # 规则模式：'off' | 'lite' | 'full'（默认 lite）
-        self.default_rules_mode = 'lite'
+        self.default_rules_mode = 'off'
         # 每段规则 typo 上限（只对 lite/full 生效）
         self.rule_typos_per_paragraph_limit = 3
         # 与 LLM 建议的窗口抑制（字符）
@@ -29,7 +29,9 @@ class ProofreadingEngine:
                 '前后': {'象棋', '印象', '现象', '形象', '气象', '象征', '抽象', '大象', '海象', '象牙', '象限', '象形'},
             },
             ('作', '做'): {
-                '后缀': {'作品', '工作', '作业', '作文', '作为', '作用', '作风', '作答', '作战', '作废'},
+                # “工作”属于左+当前（前后）匹配，而非当前+右（后缀）
+                '前后': {'工作'},
+                '后缀': {'作品', '作业', '作文', '作为', '作用', '作风', '作答', '作战', '作废'},
             },
         }
 
