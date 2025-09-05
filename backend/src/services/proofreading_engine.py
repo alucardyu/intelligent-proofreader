@@ -18,7 +18,7 @@ class ProofreadingEngine:
         self.chunk_size = 5000
         self.qwen_proofreader = QwenProofreader()
         # 规则模式：'off' | 'lite' | 'full'（默认 lite）
-        self.default_rules_mode = 'off'
+        self.default_rules_mode = 'Lite'
         # 每段规则 typo 上限（只对 lite/full 生效）
         self.rule_typos_per_paragraph_limit = 3
         # 与 LLM 建议的窗口抑制（字符）
