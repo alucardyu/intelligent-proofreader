@@ -5,7 +5,7 @@
 
 import uuid
 import time
-from .typo_checker import check_typos_and_grammar
+from .typo_checker import check_typos_and_grammar, FUNCTION_WORDS
 from .punctuation_checker import check_punctuation
 from .dfa_filter import check_sensitive_content, init_filters
 from .qwen_integration import QwenProofreader
@@ -18,7 +18,8 @@ class ProofreadingEngine:
         self.chunk_size = 5000
         self.qwen_proofreader = QwenProofreader()
         # 规则模式：'off' | 'lite' | 'full'（默认 lite）
-        self.default_rules_mode = 'Lite'
+        # 注意：统一使用小写，后续比较均以小写进行
+        self.default_rules_mode = 'lite'
         # 每段规则 typo 上限（只对 lite/full 生效）
         self.rule_typos_per_paragraph_limit = 3
         # 与 LLM 建议的窗口抑制（字符）
@@ -32,6 +33,36 @@ class ProofreadingEngine:
                 # “工作”属于左+当前（前后）匹配，而非当前+右（后缀）
                 '前后': {'工作'},
                 '后缀': {'作品', '作业', '作文', '作为', '作用', '作风', '作答', '作战', '作废'},
+            },
+            ('撒', '洒'): {
+                '前后': {'潇洒', '洒脱'},
+                '后缀': {'撒娇', '撒谎', '撒手', '撒网', '撒盐', '撒播', '撒种', '撒气', '洒水', '洒落', '洒脱'},
+            },
+            ('己', '已'): {
+                '前后': {'自己'},
+                '后缀': {'已然', '已故', '已成', '已是', '已有'},
+            },
+            ('射', '涉'): {
+                '前后': {'注射', '发射'},
+                '后缀': {'射击', '射门', '射线', '射程', '射手', '涉及', '涉猎', '涉案', '涉外', '涉险'},
+            },
+            ('帐', '账'): {
+                '前后': {'帐篷'},
+                '后缀': {'账单', '账目', '账本', '账务', '账款'},
+            },
+            ('侯', '候'): {
+                '前后': {'诸侯'},
+                '后缀': {'时候', '等候', '候车', '候诊', '问候'},
+            },
+            ('柏', '伯'): {
+                '前后': {'松柏'},
+                '后缀': {'伯乐', '伯父', '伯仲'},
+            },
+            ('粘', '黏'): {
+                '后缀': {'粘贴', '黏膜', '黏稠', '黏附', '黏连', '黏性'},
+            },
+            ('脏', '赃'): {
+                '后缀': {'赃款', '赃物', '赃证', '脏器', '脏腑'},
             },
         }
 
@@ -111,6 +142,11 @@ class ProofreadingEngine:
         else:
             # 补充默认 rules_mode
             options.setdefault('rules_mode', self.default_rules_mode)
+        # 统一规整成小写，避免传入 'Lite'/'FULL' 导致判断失效
+        if isinstance(options.get('rules_mode'), str):
+            options['rules_mode'] = options['rules_mode'].strip().lower() or self.default_rules_mode
+        else:
+            options['rules_mode'] = self.default_rules_mode
         
         all_issues = []
         
@@ -200,7 +236,8 @@ class ProofreadingEngine:
     def _process_single(self, content, options):
         """处理单个文本块"""
         all_issues = []
-        rules_mode = options.get('rules_mode', self.default_rules_mode)
+        # 规则模式（统一小写）
+        rules_mode = str(options.get('rules_mode', self.default_rules_mode)).strip().lower()
         # 0. 千问大模型辅助审校（可选）
         if options.get('qwen', True):
             qwen_start = time.time()
@@ -226,7 +263,7 @@ class ProofreadingEngine:
             # 规则模式裁剪
             if rules_mode in ('lite', 'off'):
                 filtered = []
-                FUNCTION_WORDS = {'的','地','得','在','再'}
+                # 使用 typo_checker 中的 FUNCTION_WORDS，避免重复维护
                 for it in typo_issues:
                     if rules_mode == 'off':
                         continue  # 全部忽略规则 typo/grammar
