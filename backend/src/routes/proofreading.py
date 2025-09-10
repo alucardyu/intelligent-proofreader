@@ -112,11 +112,11 @@ def report_html():
 
 @proofreading_bp.route('/export/word', methods=['POST'])
 def export_word():
-    """导出Word文档接口（生成结构化审校报告，方案B）。
-    兼容旧入参：
-    - 支持 content + issues
-    - 支持 content + result
-    - 或仅 content（服务端自动审校）
+    """导出Word文档接口。
+    默认生成结构化审校报告（方案B），也支持导出纯文本文档：
+    - mode = 'report'（默认）：使用 docx_from_report（content + issues/result）
+    - mode = 'plain'：仅将 content 导出为 Word
+    兼容旧入参：content + issues / content + result / 仅 content（服务端自动审校）
     """
     try:
         data = request.get_json()
@@ -134,33 +134,37 @@ def export_word():
         title = data.get('title', '审校文档')
         author = data.get('author', '')
         options = data.get('options', {})
+        mode = str(data.get('mode', 'report')).lower().strip() or 'report'
 
-        # 组装 result
-        result = data.get('result')
-        issues = data.get('issues')
-        if result and isinstance(result, dict) and isinstance(result.get('issues'), list):
-            final_result = result
-        elif isinstance(issues, list):
-            final_result = {
-                'issues': issues,
-                'statistics': {
-                    'total_issues': len(issues),
-                    'typos': sum(1 for i in issues if str(i.get('type','')).lower() in ('typo','错别字')),
-                    'grammar': sum(1 for i in issues if str(i.get('type','')).lower() in ('grammar','语法')),
-                    'punctuation': sum(1 for i in issues if str(i.get('type','')).lower() in ('punctuation','标点')),
-                    'sensitive': sum(1 for i in issues if str(i.get('type','')).lower() in ('sensitive','敏感')),
-                }
-            }
+        if mode == 'plain':
+            # 仅导出纯文本内容
+            doc_content = document_service.create_simple_docx(content, title=title)
         else:
-            final_result = proofreading_engine.proofread(content, options)
-        
-        meta = {
-            'rules_mode': (options.get('rules_mode') or 'LITE'),
-            'qwen': bool(options.get('llm', True)),
-        }
-
-        # 生成Word报告
-        doc_content = document_service.docx_from_report(content, final_result, title=title, author=author, meta=meta)
+            # 组装 result（结构化报告）
+            result = data.get('result')
+            issues = data.get('issues')
+            if result and isinstance(result, dict) and isinstance(result.get('issues'), list):
+                final_result = result
+            elif isinstance(issues, list):
+                final_result = {
+                    'issues': issues,
+                    'statistics': {
+                        'total_issues': len(issues),
+                        'typos': sum(1 for i in issues if str(i.get('type','')).lower() in ('typo','错别字')),
+                        'grammar': sum(1 for i in issues if str(i.get('type','')).lower() in ('grammar','语法')),
+                        'punctuation': sum(1 for i in issues if str(i.get('type','')).lower() in ('punctuation','标点')),
+                        'sensitive': sum(1 for i in issues if str(i.get('type','')).lower() in ('sensitive','敏感')),
+                    }
+                }
+            else:
+                final_result = proofreading_engine.proofread(content, options)
+            
+            meta = {
+                'rules_mode': (options.get('rules_mode') or 'LITE'),
+                'qwen': bool(options.get('llm', True)),
+            }
+            # 生成Word报告
+            doc_content = document_service.docx_from_report(content, final_result, title=title, author=author, meta=meta)
         
         # 创建文件流
         file_stream = io.BytesIO(doc_content)
