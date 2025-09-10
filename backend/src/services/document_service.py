@@ -13,6 +13,7 @@ import difflib
 from docx.shared import RGBColor, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+import json
 
 class DocumentService:
     def __init__(self):
@@ -84,6 +85,9 @@ class DocumentService:
           .orig { color: #b91c1c; }
           .arrow { color: #9e9e9e; padding: 0 6px; }
           u { text-underline-offset: 4px; }
+          .actions { position: sticky; top: 0; background: #fff; padding: 10px 0; z-index: 10; border-bottom: 1px solid #eee; margin-bottom:12px; }
+          .btn { display:inline-flex; align-items:center; gap:6px; background:#1f6feb; color:#fff; border:none; border-radius:6px; padding:8px 12px; font-size:14px; cursor:pointer; }
+          .btn:hover { background:#1a5ec9; }
         </style>
         """
 
@@ -115,9 +119,27 @@ class DocumentService:
               </tr>
             """)
 
+        # 嵌入导出所需 payload（结构化报告）
+        payload = {
+            'content': content,
+            'result': {
+                'issues': issues,
+                'statistics': stats,
+            },
+            'title': title,
+            'author': author,
+        }
+        payload_json = json.dumps(payload, ensure_ascii=False).replace('</', '<\\/')
+
         html = f"""
         <html><head><meta charset='utf-8' />{css}</head>
         <body>
+          <div class='actions'>
+            <button id='exportBtn' class='btn' title='下载为 Word（结构化报告）'>
+              导出报告
+            </button>
+            <span class='muted' style='margin-left:8px;'>下载为 Word（结构化）</span>
+          </div>
           <div class='cover'>
             <h1>{esc(title)}</h1>
             <div class='muted'>作者：{esc(author)}　·　导出时间：{meta.get('export_time') or ''}</div>
@@ -141,6 +163,43 @@ class DocumentService:
               {''.join(rows)}
             </tbody>
           </table>
+
+          <script id='__report_payload__' type='application/json'>{payload_json}</script>
+          <script>
+          (function(){{
+            async function exportReport(){{
+              try {{
+                var el = document.getElementById('__report_payload__');
+                var payload = JSON.parse(el.textContent || '{{}}');
+                // 明确指定结构化报告模式
+                payload.mode = 'report';
+                var resp = await fetch('/api/export/word', {{
+                  method: 'POST',
+                  headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }},
+                  body: JSON.stringify(payload)
+                }});
+                if (!resp.ok) throw new Error('导出失败: ' + resp.status);
+                var blob = await resp.blob();
+                var filename = (payload.title || '审校报告') + '.docx';
+                try {{
+                  var cd = resp.headers.get('Content-Disposition') || resp.headers.get('content-disposition') || '';
+                  var m1 = /filename\*?=([^;]+)/i.exec(cd);
+                  if (m1) {{ filename = decodeURIComponent(m1[1].replace(/^UTF-8''/i, '').trim().replace(/^\"|\"$/g, '')); }}
+                  else {{ var m2 = /filename=\"?([^\";]+)\"?/i.exec(cd); if (m2) filename = m2[1]; }}
+                }} catch (e) {{}}
+                var url = window.URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url; a.download = filename;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(function(){{ window.URL.revokeObjectURL(url); }}, 1000);
+              }} catch (err) {{
+                alert('导出报告失败：' + (err && err.message ? err.message : err));
+              }}
+            }}
+            var btn = document.getElementById('exportBtn');
+            if (btn) btn.addEventListener('click', exportReport);
+          }})();
+          </script>
         </body></html>
         """
         return html
