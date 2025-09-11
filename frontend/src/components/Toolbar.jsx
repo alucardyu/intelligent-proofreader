@@ -3,7 +3,6 @@ import { Badge } from '@/components/ui/badge.jsx'
 import { 
   FileUp, 
   Wand2, 
-  Edit3, 
   FileText, 
   CheckCircle2,
   AlertTriangle,
@@ -15,11 +14,11 @@ import { Switch } from '@/components/ui/switch.jsx'
 export default function Toolbar({ 
   onUpload, 
   onProofread, 
-  onManualEdit, 
   onGenerateReport,
   checkOptions,
   onCheckOptionChange,
-  isProofreading = false
+  isProofreading = false,
+  progress = { total: 0, done: 0 }
 }) {
   const handleUploadClick = () => {
     // 优先调用传入的 onUpload；若未传入，则调用全局打开对话框方法
@@ -29,6 +28,8 @@ export default function Toolbar({
       window.openUploadDialog()
     }
   }
+
+  const pct = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0
 
   return (
     <div className="h-full bg-gray-50 border-r border-gray-200 p-4 space-y-4 flex flex-col">
@@ -54,15 +55,19 @@ export default function Toolbar({
           <Wand2 className="h-4 w-4 mr-2" />
           {isProofreading ? '审校中...' : '智能审校'}
         </Button>
+
+        {progress.total > 0 && (
+          <div className="w-full mt-2">
+            <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
+              <div className="h-2 bg-green-600 transition-all" style={{ width: pct + '%' }} />
+            </div>
+            <div className="mt-1 text-xs text-gray-600 text-right">
+              {progress.done}/{progress.total}（{pct}%）
+            </div>
+          </div>
+        )}
         
-        <Button 
-          variant="outline" 
-          className="w-full justify-start"
-          onClick={onManualEdit}
-        >
-          <Edit3 className="h-4 w-4 mr-2" />
-          手动标记
-        </Button>
+        {/* 已移除“手动标记”按钮 */}
         
         <Button 
           variant="outline" 

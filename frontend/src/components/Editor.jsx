@@ -8,103 +8,24 @@ export default function Editor({
   onContentChange, 
   issues = [], 
   onIssueClick,
-  onFileUpload 
+  onFileUpload,
+  selectedIssueId,
 }) {
-  const editorRef = useRef(null)
-  const fileInputRef = useRef(null)
-  const contentRef = useRef(null)
   const [isEditing, setIsEditing] = useState(false)
-  const [isParsing, setIsParsing] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
-  const [fileInfo, setFileInfo] = useState(null) // {name,size,type}
+  const [isParsing, setIsParsing] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const editorRef = useRef(null)
+  const contentRef = useRef(null)
+  const scrollRef = useRef(null)
+  const fileInputRef = useRef(null)
   const [activeIssueId, setActiveIssueId] = useState(null)
-  
-  // 解析 .txt 文件
-  const parseTxt = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        resolve(e.target.result || '')
-      }
-      reader.onerror = () => reject(new Error('读取文本文件失败'))
-      reader.readAsText(file)
-    })
+
+  const handleInput = (e) => {
+    onContentChange && onContentChange(e.currentTarget.innerText)
   }
-  
-  // 解析 .docx 文件
-  const parseDocx = async (file) => {
-    const arrayBuffer = await file.arrayBuffer()
-    const result = await mammoth.extractRawText({ arrayBuffer })
-    return result.value || ''
-  }
-  
-  // 通用处理器
-  // 首先在 processFile 的处理过程中标准化文本，加入调试信息
-  const processFile = async (file) => {
-    const MAX_TXT_SIZE = 5 * 1024 * 1024 // 5MB
-    const MAX_DOCX_SIZE = 15 * 1024 * 1024 // 15MB
-  
-    setUploadError('')
-    setIsParsing(true)
-    try {
-      const lowerName = (file.name || '').toLowerCase()
-      const isDocx = lowerName.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      const isTxt = lowerName.endsWith('.txt') || file.type === 'text/plain'
-  
-      if (!isDocx && !isTxt) {
-        throw new Error('仅支持 .txt 或 .docx 文件')
-      }
-  
-      if (isTxt && file.size > MAX_TXT_SIZE) {
-        throw new Error('TXT 文件过大，请控制在 5MB 以内')
-      }
-      if (isDocx && file.size > MAX_DOCX_SIZE) {
-        throw new Error('DOCX 文件过大，请控制在 15MB 以内')
-      }
-  
-      let text = ''
-      if (isDocx) {
-        text = await parseDocx(file)
-      } else {
-        text = await parseTxt(file)
-      }
-  
-      // 标准化处理：去除 BOM，规范换行，清理多余空白
-      text = text.replace(/^\uFEFF/, '') // 去除 BOM
-      text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n') // 统一换行符
-      text = text.replace(/\t/g, ' ') // tab 转空格
-      text = text.trim() // 去除首尾空白
-  
-      console.log('[Upload Debug] 处理后的文本：', {
-        length: text.length,
-        firstChars: text.slice(0, 100),
-        hasLineBreaks: text.includes('\n'),
-        type: isDocx ? 'DOCX' : 'TXT'
-      })
-  
-      onContentChange(text)
-      setFileInfo({ name: file.name, size: file.size, type: isDocx ? 'DOCX' : 'TXT' })
-      if (onFileUpload) onFileUpload(file, text)
-    } catch (err) {
-      console.error('上传解析失败:', err)
-      setUploadError(err.message || '文件解析失败，请重试')
-    } finally {
-      setIsParsing(false)
-    }
-  }
-  
-  // 处理文件上传
-  const handleFileUpload = async (event) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      await processFile(file)
-      // 重置 input 值以便可以选择同一个文件再次触发
-      event.target.value = ''
-    }
-  }
-  
-  // 拖拽上传
+  const handleBlur = () => {}
+
   const handleDragOver = (e) => {
     e.preventDefault()
     setIsDragging(true)
@@ -142,14 +63,17 @@ export default function Editor({
     // 升序排序，按开始位置拼接
     const sorted = [...issues].sort((a, b) => a.position.start - b.position.start)
     let cursor = 0
+    let reconstructed = '' // 用于验证是否与原文一致
   
     const getStyle = (type) => {
-      // 使用接近 Tailwind 的颜色
-      if (type === 'typo') return { backgroundColor: '#fecaca', borderBottom: '2px solid #f87171', cursor: 'pointer' }
-      if (type === 'grammar') return { backgroundColor: '#bfdbfe', borderBottom: '2px solid #60a5fa', cursor: 'pointer' }
-      if (type === 'punctuation') return { backgroundColor: '#e9d5ff', borderBottom: '2px solid #a78bfa', cursor: 'pointer' }
-      if (type === 'sensitive') return { backgroundColor: '#fca5a5', borderBottom: '2px solid #ef4444', cursor: 'pointer' }
-      return { backgroundColor: '#fde68a', borderBottom: '2px solid #f59e0b', cursor: 'pointer' }
+      const t = String(type || '').toLowerCase()
+      // 使用接近 Tailwind 的颜色，四类清晰区分
+      if (t === 'typo') return { backgroundColor: '#fee2e2', borderBottom: '2px solid #ef4444', cursor: 'pointer' } // red-200 / red-500
+      if (t === 'grammar') return { backgroundColor: '#dbeafe', borderBottom: '2px solid #3b82f6', cursor: 'pointer' } // blue-200 / blue-500
+      if (t === 'punctuation') return { backgroundColor: '#ede9fe', borderBottom: '2px solid #8b5cf6', cursor: 'pointer' } // violet-200 / violet-500
+      if (t === 'sensitive') return { backgroundColor: '#fef3c7', borderBottom: '2px solid #f59e0b', cursor: 'pointer' } // amber-200 / amber-500
+      if (t === 'style') return { backgroundColor: '#d1fae5', borderBottom: '2px solid #10b981', cursor: 'pointer' } // emerald-200 / emerald-500
+      return { backgroundColor: '#e5e7eb', borderBottom: '2px solid #6b7280', cursor: 'pointer' } // gray-200 / gray-500
     }
   
     sorted.forEach((issue, idx) => {
@@ -167,15 +91,26 @@ export default function Editor({
   
       // 追加未高亮的前置文本
       if (cursor < start) {
-        nodes.push(content.slice(cursor, start))
+        const plain = content.slice(cursor, start)
+        nodes.push(plain)
+        reconstructed += plain
       }
   
       // 追加高亮文本
       const text = content.slice(start, end)
       const style = getStyle(issue.type)
+      const isSelected = selectedIssueId && (selectedIssueId === (issue.id || id))
+      reconstructed += text
       
-      // 验证高亮内容与预期是否匹配
-      if (text !== issue.original) {
+      // 仅在开发环境且长度一致时做严格匹配校验，避免线上后端规则差异导致的噪声
+      const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV
+      if (
+        isDev &&
+        issue.original &&
+        text !== issue.original &&
+        text.length === issue.original.length &&
+        issue.type !== 'punctuation' // 标点类经常包含跨字符提示（如“句号后空格”），不作严格比对
+      ) {
         console.warn(`[Highlight Mismatch] 位置 ${start}-${end}:`, {
           expected: issue.original,
           actual: text,
@@ -186,14 +121,15 @@ export default function Editor({
       nodes.push(
         <span
           key={id}
-          data-issue-id={id}
+          data-issue-id={issue.id || id}
           style={style}
+          className={`${isSelected ? 'ring-2 ring-blue-400 rounded-sm' : ''} transition-shadow`}
           onClick={(e) => {
             e.stopPropagation()
-            const target = issues.find(i => i.id === id || (i.position.start === start && i.position.end === end))
+            const target = issues.find(i => i.id === (issue.id || id) || (i.position.start === start && i.position.end === end))
             if (target && onIssueClick) onIssueClick(target)
           }}
-          title={`${issue.type}: ${issue.description} (${start}-${end})`}
+          title={`${issue.type}: ${issue.description || issue.message} (${start}-${end})`}
         >
           {text}
         </span>
@@ -204,30 +140,24 @@ export default function Editor({
   
     // 追加剩余文本
     if (cursor < content.length) {
-      nodes.push(content.slice(cursor))
+      const tail = content.slice(cursor)
+      nodes.push(tail)
+      reconstructed += tail
+    }
+  
+    // 安全兜底：若重建文本与原文不一致（例如某些极端重叠/越界数据），直接回退为纯文本，避免视觉重复
+    if (reconstructed !== content) {
+      console.warn('[Highlight Fallback] 重建文本与原文不一致，回退为纯文本渲染', {
+        contentLength: content.length,
+        reconstructedLength: reconstructed.length
+      })
+      return [content]
     }
   
     return nodes
-  }, [content, issues, onIssueClick])
-  
-  // 处理文本编辑
-  const handleInput = (e) => {
-    const newContent = e.target.textContent || e.target.innerText || ''
-    onContentChange(newContent)
-  }
+  }, [content, issues, onIssueClick, selectedIssueId])
 
-  // 处理点击进入编辑模式
-  const handleClick = () => {
-    if (!isEditing) {
-      setIsEditing(true)
-    }
-  }
-
-  // 处理失去焦点退出编辑模式
-  const handleBlur = () => {
-    setIsEditing(false)
-  }
-
+  // 设置全局点击处理函数（兼容现有逻辑）
   // 设置全局点击处理函数（兼容现有逻辑）
   useEffect(() => {
     window.handleIssueClick = (issueId) => {
@@ -236,7 +166,7 @@ export default function Editor({
         onIssueClick(issue)
       }
     }
-    // 暴露打开文件对话框的方法，供侧边栏“上传文档”按钮使用
+    // 暴露打开文件对话框的方法，供侧边栏"上传文档"按钮使用
     window.openUploadDialog = () => fileInputRef.current?.click()
     
     return () => {
@@ -244,33 +174,68 @@ export default function Editor({
       delete window.openUploadDialog
     }
   }, [issues, onIssueClick])
+
+  // 当右侧列表选中问题变化时，定位到对应文本
+  useEffect(() => {
+    if (!selectedIssueId || !scrollRef.current) return
+    const container = scrollRef.current
+    const el = container.querySelector(`[data-issue-id="${selectedIssueId}"]`)
+    if (!el) return
+
+    // 精准滚动：使用几何计算避免浏览器对齐差异
+    const elRect = el.getBoundingClientRect()
+    const cRect = container.getBoundingClientRect()
+    const currentScroll = container.scrollTop
+    // 目标元素相对容器顶部的偏移量（包含容器 padding）
+    const offset = elRect.top - cRect.top + currentScroll
+    const target = Math.max(0, offset - (container.clientHeight / 2) + (elRect.height / 2))
+    container.scrollTo({ top: target, behavior: 'smooth' })
+
+    // 添加短暂的闪烁动画提示定位，但不移除持久蓝框
+    el.classList.add('animate-pulse')
+    const timer = setTimeout(() => el.classList.remove('animate-pulse'), 600)
+    return () => clearTimeout(timer)
+  }, [selectedIssueId])
+  
+  const processFile = async (file) => {
+    try {
+      setIsParsing(true)
+      setUploadError('')
+      const ext = file.name.split('.').pop().toLowerCase()
+      if (ext === 'txt') {
+        const text = await file.text()
+        onFileUpload && onFileUpload(file, text)
+      } else if (ext === 'docx') {
+        const arrayBuffer = await file.arrayBuffer()
+        const { value } = await mammoth.extractRawText({ arrayBuffer })
+        onFileUpload && onFileUpload(file, value || '')
+      } else {
+        setUploadError('仅支持 .txt 或 .docx 文件')
+      }
+    } catch (e) {
+      setUploadError('文件解析失败：' + (e?.message || '未知错误'))
+    } finally {
+      setIsParsing(false)
+    }
+  }
+  
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (file) await processFile(file)
+  }
   
   return (
-    <div className="flex-1 flex flex-col bg-white" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <div className="h-full flex flex-col bg-white min-h-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {/* 编辑器头部 */}
-      <div className="border-b border-gray-200 p-4">
+      <div className="border-b border-gray-200 p-4 flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
-            <h2 className="text-lg font-medium text-gray-900 truncate">第三章 现代文学的发展与变革</h2>
-            {fileInfo && (
-              <p className="mt-1 text-xs text-gray-500 truncate">
-                {fileInfo.type} · {fileInfo.name} · {(fileInfo.size/1024).toFixed(0)} KB
-              </p>
-            )}
+            <div className="text-sm text-gray-600">
+              {content ? '已加载文档' : '请上传 .txt / .docx 文档'}
+            </div>
           </div>
-          
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isParsing}
-            className="flex items-center space-x-1"
-          >
-            <Upload className="h-4 w-4" />
-            <span>{isParsing ? '解析中...' : '上传文档'}</span>
-          </Button>
-          
-          <input
+          {/* 顶部操作按钮移除：避免与左侧侧栏重复 */}
+          <input 
             ref={fileInputRef}
             type="file"
             accept=".txt,.docx"
@@ -284,7 +249,7 @@ export default function Editor({
       </div>
       
       {/* 编辑器内容区 */}
-      <div className="flex-1 p-6 overflow-auto relative">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 relative">
         {/* 拖拽提示层 */}
         {isDragging && (
           <div className="absolute inset-3 border-2 border-dashed border-blue-400/70 bg-blue-50/50 rounded-lg flex items-center justify-center text-blue-600 text-sm z-10 pointer-events-none">
@@ -319,7 +284,7 @@ export default function Editor({
                 className={`whitespace-pre-wrap leading-7 text-gray-800 ${isDragging ? 'ring-2 ring-blue-400' : ''}`}
                 onClick={() => setActiveIssueId(null)}
               >
-                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', margin: 0 }}>
+                <pre key={`${content.length}-${issues.length}-${issues?.[0]?.position?.start ?? 0}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', margin: 0 }}>
                   {renderHighlightedContent}
                 </pre>
               </div>
@@ -331,7 +296,7 @@ export default function Editor({
             <h3 className="text-lg font-medium mb-2">上传文档开始审校</h3>
             <p className="text-sm text-center mb-4">
               支持 .txt 和 .docx 格式文件<br />
-              或直接在此处输入文本内容
+              拖拽文件到此处或点击下方按钮选择
             </p>
             <Button 
               onClick={() => fileInputRef.current?.click()}
