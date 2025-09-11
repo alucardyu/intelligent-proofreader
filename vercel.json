@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "intelligent-proofreader",
-  "installCommand": "corepack enable && cd frontend && pnpm i --frozen-lockfile",
+  "installCommand": "corepack enable && corepack use pnpm@10.4.1 && cd frontend && pnpm i",
   "buildCommand": "cd frontend && pnpm build",
   "outputDirectory": "frontend/dist",
   "rewrites": [
