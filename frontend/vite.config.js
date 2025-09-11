@@ -15,11 +15,15 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     // 开发环境代理配置（可选）
+    // 可通过环境变量 VITE_LOCAL_BACKEND=true 切换到本地后端
     proxy: {
       '/api': {
-        target: 'https://intelligent-proofreader-api.onrender.com',
+        target: process.env.VITE_LOCAL_BACKEND === 'true' 
+          ? (process.env.VITE_LOCAL_BACKEND_URL || 'http://localhost:5000')
+          : 'https://intelligent-proofreader-api.onrender.com',
         changeOrigin: true,
-        secure: true,
+        // 在开发环境放宽 HTTPS 证书校验，避免部分环境下出现 SSL 协议错误
+        secure: false,
       }
     }
   },
