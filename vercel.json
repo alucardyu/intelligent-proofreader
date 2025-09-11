@@ -1,7 +1,8 @@
 {
   "version": 2,
   "name": "intelligent-proofreader",
-  "buildCommand": "cd frontend && npm run build",
+  "installCommand": "corepack enable && cd frontend && pnpm i --frozen-lockfile",
+  "buildCommand": "cd frontend && pnpm build",
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {
